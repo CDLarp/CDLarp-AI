@@ -1,19 +1,41 @@
 'use server';
 
 import { z } from 'zod';
-
 import { createUser, getUser } from '@/lib/db/queries';
-
 import { signIn } from './auth';
 
+// Enhanced validation schema with better error messages
 const authFormSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
+  email: z.string().email('Please enter a valid email address'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
 });
 
+// Common auth states
+type AuthStatus = 'idle' | 'in_progress' | 'success' | 'failed' | 'invalid_data';
+
 export interface LoginActionState {
-  status: 'idle' | 'in_progress' | 'success' | 'failed' | 'invalid_data';
+  status: AuthStatus;
+  error?: string;
 }
+
+export interface RegisterActionState {
+  status: AuthStatus | 'user_exists';
+  error?: string;
+}
+
+const handleAuthError = (error: unknown): LoginActionState => {
+  if (error instanceof z.ZodError) {
+    return { 
+      status: 'invalid_data', 
+      error: error.errors[0].message 
+    };
+  }
+  
+  return { 
+    status: 'failed',
+    error: 'Authentication failed. Please try again.'
+  };
+};
 
 export const login = async (
   _: LoginActionState,
@@ -26,30 +48,15 @@ export const login = async (
     });
 
     await signIn('credentials', {
-      email: validatedData.email,
-      password: validatedData.password,
+      ...validatedData,
       redirect: false,
     });
 
     return { status: 'success' };
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return { status: 'invalid_data' };
-    }
-
-    return { status: 'failed' };
+    return handleAuthError(error);
   }
 };
-
-export interface RegisterActionState {
-  status:
-    | 'idle'
-    | 'in_progress'
-    | 'success'
-    | 'failed'
-    | 'user_exists'
-    | 'invalid_data';
-}
 
 export const register = async (
   _: RegisterActionState,
@@ -61,24 +68,24 @@ export const register = async (
       password: formData.get('password'),
     });
 
-    const [user] = await getUser(validatedData.email);
+    const [existingUser] = await getUser(validatedData.email);
 
-    if (user) {
-      return { status: 'user_exists' } as RegisterActionState;
+    if (existingUser) {
+      return { 
+        status: 'user_exists',
+        error: 'An account with this email already exists'
+      };
     }
+
     await createUser(validatedData.email, validatedData.password);
+    
     await signIn('credentials', {
-      email: validatedData.email,
-      password: validatedData.password,
+      ...validatedData,
       redirect: false,
     });
 
     return { status: 'success' };
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return { status: 'invalid_data' };
-    }
-
-    return { status: 'failed' };
+    return handleAuthError(error);
   }
 };
